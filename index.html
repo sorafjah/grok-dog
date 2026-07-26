@@ -1,1 +1,566 @@
-# grok-dog
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>犬型ロボット 3Dフィールドデモ</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #87CEEB; font-family: system-ui, -apple-system, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    #ui {
+      position: fixed; top: 10px; left: 10px; right: 10px;
+      background: rgba(0,0,0,0.55); color: #fff;
+      padding: 8px 12px; border-radius: 10px;
+      font-size: 12px; line-height: 1.45; pointer-events: none;
+      max-width: 260px;
+    }
+    #ui b { color: #aaf; }
+
+    /* ===== タッチ操作用UI ===== */
+    #touch-layer {
+      position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    }
+    .stick-base {
+      position: absolute; bottom: 30px; left: 30px;
+      width: 120px; height: 120px;
+      background: rgba(255,255,255,0.15);
+      border: 2px solid rgba(255,255,255,0.35);
+      border-radius: 50%;
+      pointer-events: auto;
+    }
+    .stick-knob {
+      position: absolute; top: 50%; left: 50%;
+      width: 54px; height: 54px;
+      margin: -27px 0 0 -27px;
+      background: rgba(255,255,255,0.55);
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      transition: background 0.1s;
+    }
+    .jump-btn {
+      position: absolute; bottom: 40px; right: 30px;
+      width: 80px; height: 80px;
+      background: rgba(255,112,67,0.75);
+      border: 2px solid rgba(255,255,255,0.5);
+      border-radius: 50%;
+      pointer-events: auto;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: bold; font-size: 15px;
+      user-select: none;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+    }
+    .jump-btn:active, .jump-btn.active {
+      background: rgba(255,112,67,1);
+      transform: scale(0.94);
+    }
+
+    /* PC向けはタッチUIを薄く */
+    @media (hover: hover) and (pointer: fine) {
+      .stick-base, .jump-btn { opacity: 0.35; }
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <b>犬型ロボット フィールドデモ</b><br>
+    左スティック : 移動<br>
+    右ボタン : ジャンプ<br>
+    画面ドラッグ : カメラ回転<br>
+    ピンチ : ズーム<br>
+    <span style="opacity:0.7">（PCはWASD + Spaceも可）</span>
+  </div>
+
+  <div id="touch-layer">
+    <div class="stick-base" id="stickBase">
+      <div class="stick-knob" id="stickKnob"></div>
+    </div>
+    <div class="jump-btn" id="jumpBtn">JUMP</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ---------- 基本セットアップ ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB);
+    scene.fog = new THREE.Fog(0x87CEEB, 40, 120);
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
+    camera.position.set(12, 10, 18);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI * 0.48;
+    controls.minDistance = 6;
+    controls.maxDistance = 40;
+    controls.target.set(0, 1, 0);
+    controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+
+    // ---------- ライト ----------
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x448844, 0.7);
+    scene.add(hemi);
+
+    const sun = new THREE.DirectionalLight(0xfff5e0, 1.1);
+    sun.position.set(30, 50, 20);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 100;
+    sun.shadow.camera.left = -40;
+    sun.shadow.camera.right = 40;
+    sun.shadow.camera.top = 40;
+    sun.shadow.camera.bottom = -40;
+    scene.add(sun);
+
+    // ---------- マテリアル ----------
+    const matGrass = new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.8 });
+    const matDirt  = new THREE.MeshStandardMaterial({ color: 0x8d6e63, roughness: 0.9 });
+    const matRock  = new THREE.MeshStandardMaterial({ color: 0x78909c, roughness: 0.85 });
+    const matWood  = new THREE.MeshStandardMaterial({ color: 0x6d4c41, roughness: 0.8 });
+    const matWater = new THREE.MeshStandardMaterial({
+      color: 0x2196f3, transparent: true, opacity: 0.7, roughness: 0.1, metalness: 0.3
+    });
+    const matLeaf  = new THREE.MeshStandardMaterial({ color: 0x2e7d32, roughness: 0.9 });
+    const matRobot = new THREE.MeshStandardMaterial({ color: 0x37474f, metalness: 0.6, roughness: 0.4 });
+    const matAccent= new THREE.MeshStandardMaterial({ color: 0xff7043, metalness: 0.4, roughness: 0.5 });
+
+    // ---------- 地面（なだらかな丘） ----------
+    const groundSize = 60;
+    const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize, 64, 64);
+    const pos = groundGeo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      let h = 0;
+      h += Math.sin(x * 0.15) * Math.cos(y * 0.12) * 1.8;
+      h += Math.sin(x * 0.08 + 1.5) * Math.sin(y * 0.1) * 1.2;
+      h += Math.cos(x * 0.25) * 0.4;
+      const dist = Math.sqrt(x * x + y * y);
+      if (dist < 8) h *= 0.3;
+      pos.setZ(i, h);
+    }
+    groundGeo.computeVertexNormals();
+    groundGeo.rotateX(-Math.PI / 2);
+
+    const ground = new THREE.Mesh(groundGeo, matGrass);
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    function sampleHeight(x, z) {
+      let h = 0;
+      h += Math.sin(x * 0.15) * Math.cos(z * 0.12) * 1.8;
+      h += Math.sin(x * 0.08 + 1.5) * Math.sin(z * 0.1) * 1.2;
+      h += Math.cos(x * 0.25) * 0.4;
+      const dist = Math.sqrt(x * x + z * z);
+      if (dist < 8) h *= 0.3;
+      return h;
+    }
+
+    // ---------- 障害物リスト（めり込み防止用） ----------
+    const solidObjects = []; // { mesh, radius }
+
+    // ---------- 崖 ----------
+    const cliff = new THREE.Mesh(new THREE.BoxGeometry(8, 6, 20), matRock);
+    cliff.position.set(-22, 2, 5);
+    cliff.castShadow = true;
+    cliff.receiveShadow = true;
+    scene.add(cliff);
+    solidObjects.push({ mesh: cliff, radius: 5.5 });
+
+    const platform = new THREE.Mesh(new THREE.BoxGeometry(6, 0.4, 6), matDirt);
+    platform.position.set(-22, 5.2, 5);
+    platform.castShadow = true;
+    platform.receiveShadow = true;
+    scene.add(platform);
+
+    // ---------- 段差・階段 ----------
+    const steps = [];
+    for (let i = 0; i < 5; i++) {
+      const step = new THREE.Mesh(new THREE.BoxGeometry(4, 0.35, 1.2), matDirt);
+      step.position.set(10 + i * 0.1, 0.2 + i * 0.35, -8 + i * 1.1);
+      step.castShadow = true;
+      step.receiveShadow = true;
+      scene.add(step);
+      steps.push(step);
+    }
+
+    // ---------- ブロック ----------
+    const blockPositions = [
+      [5, 0, 6], [7, 0, 8], [4, 0, 9],
+      [-6, 0, -10], [-8, 0, -8],
+      [15, 0, 12], [16, 0, 14]
+    ];
+    blockPositions.forEach(([x, , z]) => {
+      const h = 0.8 + Math.random() * 1.2;
+      const b = new THREE.Mesh(new THREE.BoxGeometry(1.4, h, 1.4), matRock);
+      b.position.set(x, sampleHeight(x, z) + h / 2, z);
+      b.castShadow = true;
+      b.receiveShadow = true;
+      scene.add(b);
+      solidObjects.push({ mesh: b, radius: 0.85 });
+    });
+
+    // ---------- 池 ----------
+    const pond = new THREE.Mesh(new THREE.CircleGeometry(5.5, 32), matWater);
+    pond.rotation.x = -Math.PI / 2;
+    pond.position.set(0, 0.15, 0);
+    scene.add(pond);
+
+    const pondEdge = new THREE.Mesh(new THREE.RingGeometry(5.2, 6.2, 32), matDirt);
+    pondEdge.rotation.x = -Math.PI / 2;
+    pondEdge.position.set(0, 0.2, 0);
+    scene.add(pondEdge);
+
+    // ---------- 橋 ----------
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.25, 12), matWood);
+    bridge.position.set(0, 0.9, 0);
+    bridge.castShadow = true;
+    bridge.receiveShadow = true;
+    scene.add(bridge);
+
+    [-1.1, 1.1].forEach(side => {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 12), matWood);
+      rail.position.set(side, 1.25, 0);
+      rail.castShadow = true;
+      scene.add(rail);
+    });
+
+    // ---------- 岩 ----------
+    function addRock(x, z, scale = 1) {
+      const geo = new THREE.DodecahedronGeometry(0.7 * scale, 0);
+      const rock = new THREE.Mesh(geo, matRock);
+      rock.position.set(x, sampleHeight(x, z) + 0.4 * scale, z);
+      rock.rotation.set(Math.random(), Math.random(), Math.random());
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      scene.add(rock);
+      solidObjects.push({ mesh: rock, radius: 0.7 * scale });
+    }
+    [[-12, 8], [-10, 12], [12, -14], [18, 5], [-15, -5], [8, 15]].forEach(([x, z]) => {
+      addRock(x, z, 0.8 + Math.random() * 0.8);
+    });
+
+    // ---------- 木 ----------
+    function addTree(x, z) {
+      const h = sampleHeight(x, z);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 2.2, 8), matWood);
+      trunk.position.set(x, h + 1.1, z);
+      trunk.castShadow = true;
+      scene.add(trunk);
+      solidObjects.push({ mesh: trunk, radius: 0.45 });
+
+      const leaves = new THREE.Mesh(new THREE.SphereGeometry(1.4, 8, 6), matLeaf);
+      leaves.position.set(x, h + 2.8, z);
+      leaves.castShadow = true;
+      scene.add(leaves);
+      solidObjects.push({ mesh: leaves, radius: 1.0 });
+    }
+    [[-18, -12], [-14, 15], [14, -6], [20, -12], [-8, -16], [6, 18], [22, 8]].forEach(([x, z]) => {
+      addTree(x, z);
+    });
+
+    // ---------- 犬型ロボット ----------
+    const robot = new THREE.Group();
+    scene.add(robot);
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.55, 0.7), matRobot);
+    body.position.y = 0.7;
+    body.castShadow = true;
+    robot.add(body);
+
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.4, 0.45), matRobot);
+    head.position.set(0.85, 0.95, 0);
+    head.castShadow = true;
+    robot.add(head);
+
+    const earGeo = new THREE.BoxGeometry(0.12, 0.25, 0.08);
+    const earL = new THREE.Mesh(earGeo, matAccent);
+    earL.position.set(0.85, 1.2, 0.18);
+    robot.add(earL);
+    const earR = earL.clone();
+    earR.position.z = -0.18;
+    robot.add(earR);
+
+    const eyeGeo = new THREE.SphereGeometry(0.06, 8, 8);
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00e5ff, emissiveIntensity: 0.6 });
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(1.08, 1.0, 0.14);
+    robot.add(eyeL);
+    const eyeR = eyeL.clone();
+    eyeR.position.z = -0.14;
+    robot.add(eyeR);
+
+    const legGeo = new THREE.CylinderGeometry(0.09, 0.07, 0.55, 8);
+    const legs = [];
+    const legOffsets = [[0.45, 0.28], [0.45, -0.28], [-0.45, 0.28], [-0.45, -0.28]];
+    legOffsets.forEach(([ox, oz]) => {
+      const leg = new THREE.Mesh(legGeo, matRobot);
+      leg.position.set(ox, 0.35, oz);
+      leg.castShadow = true;
+      robot.add(leg);
+      legs.push(leg);
+    });
+
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.1), matAccent);
+    tail.position.set(-0.85, 0.85, 0);
+    tail.rotation.z = 0.4;
+    robot.add(tail);
+
+    robot.position.set(12, 0, 10);
+
+    // ---------- 入力（キーボード + タッチ） ----------
+    const keys = {};
+    window.addEventListener('keydown', e => { keys[e.code] = true; });
+    window.addEventListener('keyup',   e => { keys[e.code] = false; });
+
+    // 仮想スティック
+    const stickBase = document.getElementById('stickBase');
+    const stickKnob = document.getElementById('stickKnob');
+    const jumpBtn   = document.getElementById('jumpBtn');
+
+    let stickActive = false;
+    let stickVec = { x: 0, y: 0 }; // -1〜1
+    let jumpPressed = false;
+
+    function updateStick(clientX, clientY) {
+      const rect = stickBase.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      let dx = clientX - cx;
+      let dy = clientY - cy;
+      const maxR = rect.width * 0.38;
+      const len = Math.hypot(dx, dy);
+      if (len > maxR) {
+        dx = dx / len * maxR;
+        dy = dy / len * maxR;
+      }
+      stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+      stickVec.x = dx / maxR;
+      stickVec.y = dy / maxR;
+    }
+
+    function resetStick() {
+      stickActive = false;
+      stickVec.x = 0;
+      stickVec.y = 0;
+      stickKnob.style.transform = 'translate(0,0)';
+    }
+
+    // スティックのタッチ
+    stickBase.addEventListener('touchstart', e => {
+      e.preventDefault();
+      stickActive = true;
+      const t = e.changedTouches[0];
+      updateStick(t.clientX, t.clientY);
+    }, { passive: false });
+
+    stickBase.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (!stickActive) return;
+      const t = e.changedTouches[0];
+      updateStick(t.clientX, t.clientY);
+    }, { passive: false });
+
+    stickBase.addEventListener('touchend', e => {
+      e.preventDefault();
+      resetStick();
+    }, { passive: false });
+
+    stickBase.addEventListener('touchcancel', resetStick);
+
+    // ジャンプボタン
+    function setJump(v) {
+      jumpPressed = v;
+      jumpBtn.classList.toggle('active', v);
+    }
+    jumpBtn.addEventListener('touchstart', e => { e.preventDefault(); setJump(true); }, { passive: false });
+    jumpBtn.addEventListener('touchend',   e => { e.preventDefault(); setJump(false); }, { passive: false });
+    jumpBtn.addEventListener('touchcancel', () => setJump(false));
+
+    // マウスでもスティックが使えるように（PCテスト用）
+    stickBase.addEventListener('mousedown', e => {
+      stickActive = true;
+      updateStick(e.clientX, e.clientY);
+    });
+    window.addEventListener('mousemove', e => {
+      if (stickActive) updateStick(e.clientX, e.clientY);
+    });
+    window.addEventListener('mouseup', resetStick);
+
+    jumpBtn.addEventListener('mousedown', () => setJump(true));
+    window.addEventListener('mouseup', () => setJump(false));
+
+    // ---------- 接地判定用オブジェクトを集める ----------
+    const walkableMeshes = [ground, bridge, platform, ...steps];
+
+    const raycaster = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const robotHeightOffset = 0.52; // 足が地面に少し食い込むくらい
+
+    function getGroundY(x, z, currentY) {
+      // 現在位置より十分上から真下にレイを飛ばす（高台対応で余裕を持たせる）
+      const originY = Math.max(currentY + 4.0, 8.0);
+      const origin = new THREE.Vector3(x, originY, z);
+      raycaster.set(origin, down);
+      raycaster.far = originY + 5;
+      const hits = raycaster.intersectObjects(walkableMeshes, false);
+      if (hits.length > 0) {
+        // 一番上の面を採用
+        return hits[0].point.y + robotHeightOffset;
+      }
+      return sampleHeight(x, z) + robotHeightOffset;
+    }
+
+    // 障害物との簡易衝突判定（XZ平面の円）
+    const robotRadius = 0.55;
+    function isBlocked(x, z) {
+      for (const { mesh, radius } of solidObjects) {
+        const dx = x - mesh.position.x;
+        const dz = z - mesh.position.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < radius + robotRadius) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // ---------- 物理・移動 ----------
+    let velocityY = 0;
+    let onGround = true;
+    const moveSpeed = 8;
+    const jumpPower = 7;
+    const gravity = -22;
+
+    const clock = new THREE.Clock();
+    let walkPhase = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      // 入力合成（キーボード + スティック）
+      let mx = stickVec.x;
+      let mz = stickVec.y;
+
+      if (keys['KeyW'] || keys['ArrowUp'])    mz -= 1;
+      if (keys['KeyS'] || keys['ArrowDown'])  mz += 1;
+      if (keys['KeyA'] || keys['ArrowLeft'])  mx -= 1;
+      if (keys['KeyD'] || keys['ArrowRight']) mx += 1;
+
+      const len = Math.hypot(mx, mz);
+      if (len > 1) { mx /= len; mz /= len; }
+
+      if (len > 0.05) {
+        const camDir = new THREE.Vector3();
+        camera.getWorldDirection(camDir);
+        camDir.y = 0;
+        camDir.normalize();
+        const camRight = new THREE.Vector3().crossVectors(camDir, new THREE.Vector3(0, 1, 0)).normalize();
+
+        const moveDir = new THREE.Vector3()
+          .addScaledVector(camDir, -mz)
+          .addScaledVector(camRight, mx)
+          .normalize();
+
+        // 移動先をチェックしてから進む（障害物にめり込まない）
+        const tryX = robot.position.x + moveDir.x * moveSpeed * dt;
+        const tryZ = robot.position.z + moveDir.z * moveSpeed * dt;
+
+        if (!isBlocked(tryX, tryZ)) {
+          robot.position.x = tryX;
+          robot.position.z = tryZ;
+        } else {
+          // 壁ずり：Xだけ / Zだけ 試す
+          if (!isBlocked(tryX, robot.position.z)) {
+            robot.position.x = tryX;
+          } else if (!isBlocked(robot.position.x, tryZ)) {
+            robot.position.z = tryZ;
+          }
+        }
+
+        // モデルの前方はローカル +X なので -π/2 補正して顔を進行方向へ
+        const targetAngle = Math.atan2(moveDir.x, moveDir.z) - Math.PI / 2;
+        let ang = robot.rotation.y;
+        let diff = targetAngle - ang;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        robot.rotation.y += diff * Math.min(1, 20 * dt);
+
+        walkPhase += dt * 14;
+        legs.forEach((leg, i) => {
+          const phase = walkPhase + (i % 2 === 0 ? 0 : Math.PI);
+          leg.rotation.x = Math.sin(phase) * 0.45;
+        });
+        tail.rotation.z = 0.4 + Math.sin(walkPhase * 0.7) * 0.15;
+      } else {
+        legs.forEach(leg => { leg.rotation.x *= 0.8; });
+      }
+
+      // ジャンプ
+      if ((keys['Space'] || jumpPressed) && onGround) {
+        velocityY = jumpPower;
+        onGround = false;
+      }
+
+      velocityY += gravity * dt;
+      robot.position.y += velocityY * dt;
+
+      // レイキャストで正確な地面の高さを取得
+      const targetY = getGroundY(robot.position.x, robot.position.z, robot.position.y);
+
+      if (robot.position.y <= targetY + 0.08) {
+        robot.position.y = targetY;
+        velocityY = 0;
+        onGround = true;
+      } else {
+        onGround = false;
+      }
+
+      robot.position.x = THREE.MathUtils.clamp(robot.position.x, -28, 28);
+      robot.position.z = THREE.MathUtils.clamp(robot.position.z, -28, 28);
+
+      controls.target.lerp(robot.position.clone().add(new THREE.Vector3(0, 1, 0)), 0.08);
+      controls.update();
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // iOSでアドレスバーなどを考慮したリサイズ
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      }, 200);
+    });
+  </script>
+</body>
+</html>
